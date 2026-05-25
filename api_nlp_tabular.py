@@ -1,31 +1,28 @@
 """
+WorkSafe AI - Combined NLP + Tabular Prediction API
 
-WorkSafe AI - FastAPI untuk 2 model sekaligus:
-1. Model NLP: input title, description, top_skills, top_core_tasks, numeric_features
-2. Model Tabular: input features berisi nilai fitur numerik tabular
+Struktur folder pake:
 
-Struktur folder:
 project/
 ├── api_nlp_tabular.py
 └── models/
     ├── nlp_model/
-    │   ├── worksafe_risk_model_best.keras
-    │   ├── worksafe_risk_model.keras              # opsional fallback
+    │   ├── worksafe_risk_model_best.keras           
     │   └── worksafe_artifacts.json
-    ├── tabular_model/
-    │   ├── worksafe_model_v1.keras
-    │   ├── scaler.pkl
-    │   ├── imputer.pkl
-    │   └── feature_cols.pkl
+    └── tabular_model/
+        ├── worksafe_model_v1.keras
+        ├── scaler.pkl
+        ├── imputer.pkl
+        └── feature_cols.pkl
 
-Install:
-bikin venv lalu
+Install dependency ini yak:
+pake venv
 pip install fastapi uvicorn tensorflow numpy pandas scikit-learn openrouter
 
 Jalankan:
-uvicorn api_nlp_tabular:app --reload --host 0.0.0.0 --port 8000
+uvicorn api_nlp_tabular_combined:app --reload --host 0.0.0.0 --port 8000
 
-Docs:
+Dok:
 http://127.0.0.1:8000/docs
 """
 
@@ -34,17 +31,17 @@ import os
 import pickle
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from tensorflow import keras
 
-# CUSTOM OBJECTS
+
+# Custom Objects
 
 @tf.keras.utils.register_keras_serializable(package="WorkSafeAI", name="AttentionPooling")
 class AttentionPooling(tf.keras.layers.Layer):
@@ -67,7 +64,7 @@ class AttentionPooling(tf.keras.layers.Layer):
 
 
 @tf.keras.utils.register_keras_serializable(package="WorkSafeAI", name="FocalLoss")
-class FocalLoss(keras.losses.Loss):
+class FocalLoss(tf.keras.losses.Loss):
     def __init__(self, gamma=2.0, alpha=0.25, name="focal_loss", **kwargs):
         super().__init__(name=name, **kwargs)
         self.gamma = gamma
@@ -91,59 +88,50 @@ class FocalLoss(keras.losses.Loss):
         return config
 
 
-# Compatibility layer untuk model .keras yang disimpan dengan Keras lebih baru.
-# Beberapa versi Keras menyimpan argumen `quantization_config` pada Embedding,
-# sedangkan environment lama belum mengenalinya. Class ini mengabaikan argumen itu
-# agar model tetap bisa diload untuk inference.
-@tf.keras.utils.register_keras_serializable(package="keras.layers", name="Embedding")
-class CompatibleEmbedding(tf.keras.layers.Embedding):
-    def __init__(self, *args, quantization_config=None, **kwargs):
-        self.quantization_config = quantization_config
-        super().__init__(*args, **kwargs)
+CUSTOM_OBJECTS = {
+    "AttentionPooling": AttentionPooling,
+    "WorkSafeAI>AttentionPooling": AttentionPooling,
+    "FocalLoss": FocalLoss,
+    "WorkSafeAI>FocalLoss": FocalLoss,
+}
 
-    def get_config(self):
-        config = super().get_config()
-        # Jangan masukkan lagi ke config agar kompatibel dengan versi lama.
-        config.pop("quantization_config", None)
-        return config
+# Path Model EyAi
 
-# PATH CONFIG
 
 BASE_DIR = Path(__file__).resolve().parent
-MODELS_DIR = BASE_DIR / "models"
 
-# NLP model paths
-NLP_EXPORT_DIR = MODELS_DIR / "nlp_model"
-NLP_MODEL_PATH = NLP_EXPORT_DIR / "worksafe_risk_model_best.keras"
-NLP_FALLBACK_MODEL_PATH = NLP_EXPORT_DIR / "worksafe_risk_model.keras"
-NLP_ARTIFACT_PATH = NLP_EXPORT_DIR / "worksafe_artifacts.json"
+NLP_DIR = BASE_DIR / "models" / "nlp_model"
+NLP_MODEL_PATH = NLP_DIR / "worksafe_risk_model_best.keras"
+NLP_FALLBACK_MODEL_PATH = NLP_DIR / "worksafe_risk_model.keras"
+NLP_ARTIFACT_PATH = NLP_DIR / "worksafe_artifacts.json"
 
-# Tabular model paths
-TABULAR_EXPORT_DIR = MODELS_DIR / "tabular_model"
-TABULAR_MODEL_PATH = TABULAR_EXPORT_DIR / "worksafe_model_v1.keras"
-TABULAR_SCALER_PATH = TABULAR_EXPORT_DIR / "scaler.pkl"
-TABULAR_IMPUTER_PATH = TABULAR_EXPORT_DIR / "imputer.pkl"
-TABULAR_FEATURES_PATH = TABULAR_EXPORT_DIR / "feature_cols.pkl"
+TABULAR_DIR = BASE_DIR / "models" / "tabular_model"
+TABULAR_MODEL_PATH = TABULAR_DIR / "worksafe_model_v1.keras"
+TABULAR_SCALER_PATH = TABULAR_DIR / "scaler.pkl"
+TABULAR_IMPUTER_PATH = TABULAR_DIR / "imputer.pkl"
+TABULAR_FEATURE_COLS_PATH = TABULAR_DIR / "feature_cols.pkl"
 
-# GLOBAL OBJECTS
+# FastAPI App
 
 app = FastAPI(
-    title="WorkSafe AI - NLP + Tabular Prediction API",
+    title="WorkSafe AI Combined Prediction API",
     description=(
-        "API gabungan untuk menjalankan model NLP dan model tabular dalam satu server. "
-        "Gunakan /predict untuk NLP saja, /predict-tabular untuk tabular saja, "
-        "dan /predicts untuk menjalankan dua model sekaligus."
+        "API gabungan untuk prediksi risiko otomasi pekerjaan menggunakan "
+        "model NLP dan model tabular, lalu membuat rekomendasi reskilling dengan OpenRouter."
     ),
     version="2.0.0",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Untuk production, ubah ke domain frontend kamu.
+    allow_origins=["*"],  # Untuk production, ubah ke domain frontend untuk cors.
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Global Objects
 
 NLP_MODEL = None
 NLP_ARTIFACTS: Optional[Dict[str, Any]] = None
@@ -152,7 +140,8 @@ TABULAR_MODEL = None
 TABULAR_SCALER = None
 TABULAR_IMPUTER = None
 TABULAR_FEATURE_COLS = None
-TABULAR_MEDIAN_VALUES: Dict[str, float] = {}
+
+LOAD_ERRORS: Dict[str, str] = {}
 
 TABULAR_LABEL_MAP = {
     0: "Low Risk",
@@ -160,9 +149,9 @@ TABULAR_LABEL_MAP = {
     2: "High Risk",
 }
 
-# SCHEMAS
+# Schemas
 
-class NLPPredictRequest(BaseModel):
+class PredictRequest(BaseModel):
     title: str = Field(..., example="Warehouse Administration Staff")
     description: str = Field(
         default="",
@@ -176,52 +165,54 @@ class NLPPredictRequest(BaseModel):
         default="",
         example="record inventory movement, prepare reports, check warehouse documents",
     )
+
+    # Dipertahankan agar kompatibel dengan API NLP lama.
+    # Nilai ini dipakai untuk input numeric model NLP.
+    # Jika tabular_features kosong, nilai ini juga dipakai sebagai input tabular.
     numeric_features: Optional[Dict[str, float]] = Field(
         default=None,
         example={},
-        description="Opsional untuk model NLP. Jika kosong, memakai median dari worksafe_artifacts.json.",
-    )
-    generate_reskilling: bool = Field(
-        default=True,
-        description="Jika true, API akan mencoba membuat rekomendasi reskilling via OpenRouter.",
-    )
-    openrouter_model: str = Field(
-        default="meta-llama/llama-3.3-70b-instruct:free",
-        description="Nama model OpenRouter.",
-    )
-
-
-class TabularPredictRequest(BaseModel):
-    features: Optional[Dict[str, float]] = Field(
-        default=None,
-        example={
-            "act_working_with_computers": 4,
-            "skl_critical_thinking": 4,
-            "skl_complex_problem_solving": 3,
-        },
         description=(
-            "Fitur numerik untuk model tabular. "
-            "Boleh hanya mengirim sebagian fitur; fitur yang kosong akan diisi median training."
+            "Opsional. Dipakai untuk numeric input model NLP. "
+            "Jika tabular_features kosong, field ini juga dipakai untuk model tabular."
         ),
     )
 
-
-class CombinedPredictRequest(NLPPredictRequest):
-    features: Optional[Dict[str, float]] = Field(
-        default=None,
-        example={
-            "act_working_with_computers": 4,
-            "skl_critical_thinking": 4,
-            "skl_complex_problem_solving": 3,
-        },
-        description=(
-            "Fitur tabular. Ini berbeda dari numeric_features. "
-            "features digunakan model tabular, numeric_features digunakan model NLP."
-        ),
-    )
+    # Field baru khusus model tabular.
     tabular_features: Optional[Dict[str, float]] = Field(
         default=None,
-        description="Alias opsional untuk features. Jika features kosong, nilai ini akan dipakai.",
+        example={
+            "act_repairing_and_maintaining_mechanical_equipment": 2,
+            "act_operating_vehicles,_mechanized_devices,_or_equipment": 3,
+            "act_handling_and_moving_objects": 4,
+            "skl_troubleshooting": 3,
+            "skl_critical_thinking": 4,
+            "skl_complex_problem_solving": 4,
+            "act_working_with_computers": 5,
+            "skl_coordination": 4,
+        },
+        description=(
+            "Opsional. Input fitur tabular sesuai feature_cols.pkl. "
+            "Fitur yang tidak dikirim akan diisi oleh imputer/median training."
+        ),
+    )
+
+    nlp_weight: float = Field(
+        default=0.6,
+        description="Bobot model NLP untuk final ensemble prediction.",
+    )
+    tabular_weight: float = Field(
+        default=0.4,
+        description="Bobot model tabular untuk final ensemble prediction.",
+    )
+
+    generate_reskilling: bool = Field(
+        default=True,
+        description="Jika true, API akan memanggil OpenRouter untuk membuat rekomendasi reskilling.",
+    )
+    openrouter_model: str = Field(
+        default="deepseek/deepseek-v4-flash:free",
+        description="Model OpenRouter. Bisa diganti sesuai model yang tersedia di akunmu.",
     )
 
 
@@ -231,16 +222,60 @@ class HealthResponse(BaseModel):
     nlp_artifacts_loaded: bool
     tabular_model_loaded: bool
     tabular_artifacts_loaded: bool
-    paths: Dict[str, str]
+    nlp_model_path: str
+    nlp_artifact_path: str
+    tabular_model_path: str
+    tabular_scaler_path: str
+    tabular_imputer_path: str
+    tabular_feature_cols_path: str
+    load_errors: Dict[str, str]
 
-# LOADERS
+# Loaders
 
-def load_json(path: Path) -> Dict[str, Any]:
+def _load_json(path: Path) -> Dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"File tidak ditemukan: {path}")
 
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _load_pickle(path: Path):
+    if not path.exists():
+        raise FileNotFoundError(f"File tidak ditemukan: {path}")
+
+    with open(path, "rb") as f:
+        obj = pickle.load(f)
+
+    return obj
+
+
+def repair_simple_imputer_compatibility(imputer):
+    """
+    Helper aman untuk mengurangi risiko error kompatibilitas pickle SimpleImputer
+    antar versi scikit-learn. Jika atribut internal tidak ada, kita tambahkan
+    secara defensif tanpa mengubah nilai statistics_ :).
+    """
+    if imputer is None:
+        return imputer
+
+    try:
+        if not hasattr(imputer, "_fit_dtype"):
+            imputer._fit_dtype = np.dtype("float64")
+    except Exception:
+        pass
+
+    try:
+        if not hasattr(imputer, "_fill_dtype"):
+            imputer._fill_dtype = np.dtype("float64")
+    except Exception:
+        pass
+
+    return imputer
+
+
+def load_nlp_artifacts() -> Dict[str, Any]:
+    return _load_json(NLP_ARTIFACT_PATH)
 
 
 def load_nlp_model():
@@ -251,101 +286,81 @@ def load_nlp_model():
 
     if not selected_model_path.exists():
         raise FileNotFoundError(
-            f"Model NLP tidak ditemukan. Dicari di: {NLP_MODEL_PATH} atau {NLP_FALLBACK_MODEL_PATH}"
+            f"File model NLP tidak ditemukan. Dicari di: {NLP_MODEL_PATH} atau {NLP_FALLBACK_MODEL_PATH}"
         )
 
     return tf.keras.models.load_model(
         selected_model_path,
-        custom_objects={
-            "AttentionPooling": AttentionPooling,
-            "WorkSafeAI>AttentionPooling": AttentionPooling,
-            "Embedding": CompatibleEmbedding,
-            "keras.layers.Embedding": CompatibleEmbedding,
-            "keras.src.layers.core.embedding.Embedding": CompatibleEmbedding,
-        },
+        custom_objects=CUSTOM_OBJECTS,
         compile=False,
     )
 
 
-def load_tabular_artifacts():
-    missing_paths = [
-        path for path in [
-            TABULAR_MODEL_PATH,
-            TABULAR_SCALER_PATH,
-            TABULAR_IMPUTER_PATH,
-            TABULAR_FEATURES_PATH,
-        ]
-        if not path.exists()
-    ]
+def load_tabular_resources() -> Tuple[Any, Any, Any, list]:
+    if not TABULAR_MODEL_PATH.exists():
+        raise FileNotFoundError(f"File model tabular tidak ditemukan: {TABULAR_MODEL_PATH}")
 
-    if missing_paths:
-        raise FileNotFoundError(
-            "Artifact tabular belum lengkap: "
-            + ", ".join(str(path) for path in missing_paths)
-        )
-
-    tabular_model = keras.models.load_model(
+    model = tf.keras.models.load_model(
         TABULAR_MODEL_PATH,
-        custom_objects={
-            "FocalLoss": FocalLoss,
-            "WorkSafeAI>FocalLoss": FocalLoss,
-            "Embedding": CompatibleEmbedding,
-            "keras.layers.Embedding": CompatibleEmbedding,
-            "keras.src.layers.core.embedding.Embedding": CompatibleEmbedding,
-        },
+        custom_objects=CUSTOM_OBJECTS,
         compile=False,
     )
 
-    with open(TABULAR_SCALER_PATH, "rb") as f:
-        scaler = pickle.load(f)
+    scaler = _load_pickle(TABULAR_SCALER_PATH)
+    imputer = repair_simple_imputer_compatibility(_load_pickle(TABULAR_IMPUTER_PATH))
+    feature_cols = _load_pickle(TABULAR_FEATURE_COLS_PATH)
 
-    with open(TABULAR_IMPUTER_PATH, "rb") as f:
-        imputer = pickle.load(f)
+    if not isinstance(feature_cols, (list, tuple)):
+        raise TypeError("feature_cols.pkl harus berisi list/tuple nama fitur.")
 
-    with open(TABULAR_FEATURES_PATH, "rb") as f:
-        feature_cols = pickle.load(f)
+    feature_cols = list(feature_cols)
 
-    return tabular_model, scaler, imputer, list(feature_cols)
+    return model, scaler, imputer, feature_cols
 
 
 @app.on_event("startup")
 def startup_event():
     global NLP_MODEL, NLP_ARTIFACTS
-    global TABULAR_MODEL, TABULAR_SCALER, TABULAR_IMPUTER
-    global TABULAR_FEATURE_COLS, TABULAR_MEDIAN_VALUES
+    global TABULAR_MODEL, TABULAR_SCALER, TABULAR_IMPUTER, TABULAR_FEATURE_COLS
+    global LOAD_ERRORS
+
+    LOAD_ERRORS = {}
 
     print("Load NLP artifacts...")
-    NLP_ARTIFACTS = load_json(NLP_ARTIFACT_PATH)
+    try:
+        NLP_ARTIFACTS = load_nlp_artifacts()
+        print("NLP artifacts loaded.")
+    except Exception as e:
+        LOAD_ERRORS["nlp_artifacts"] = f"{type(e).__name__}: {e}"
+        print("Gagal load NLP artifacts:", LOAD_ERRORS["nlp_artifacts"])
 
     print("Load NLP model...")
-    NLP_MODEL = load_nlp_model()
+    try:
+        NLP_MODEL = load_nlp_model()
+        print("NLP model loaded.")
+        print("NLP input model:", [inp.name for inp in NLP_MODEL.inputs])
+        print("NLP output model:", [out.name for out in NLP_MODEL.outputs])
+    except Exception as e:
+        LOAD_ERRORS["nlp_model"] = f"{type(e).__name__}: {e}"
+        print("Gagal load NLP model:", LOAD_ERRORS["nlp_model"])
 
-    print("Load tabular model and artifacts...")
-    (
-        TABULAR_MODEL,
-        TABULAR_SCALER,
-        TABULAR_IMPUTER,
-        TABULAR_FEATURE_COLS,
-    ) = load_tabular_artifacts()
+    print("Load tabular model & artifacts...")
+    try:
+        (
+            TABULAR_MODEL,
+            TABULAR_SCALER,
+            TABULAR_IMPUTER,
+            TABULAR_FEATURE_COLS,
+        ) = load_tabular_resources()
+        print("Tabular model & artifacts loaded.")
+        print(f"Jumlah fitur tabular: {len(TABULAR_FEATURE_COLS)}")
+    except Exception as e:
+        LOAD_ERRORS["tabular"] = f"{type(e).__name__}: {e}"
+        print("Gagal load tabular resources:", LOAD_ERRORS["tabular"])
 
-    TABULAR_MEDIAN_VALUES = {
-        col: float(TABULAR_IMPUTER.statistics_[i])
-        for i, col in enumerate(TABULAR_FEATURE_COLS)
-    }
+# Helper NLP
 
-    print("Semua model dan artifact berhasil diload.")
-    print("NLP input:", [inp.name for inp in NLP_MODEL.inputs])
-    print("NLP output:", [out.name for out in NLP_MODEL.outputs])
-    print(f"Jumlah fitur tabular: {len(TABULAR_FEATURE_COLS)}")
-
-# NLP HELPERS
-
-def build_job_text(
-    title: str,
-    description: str = "",
-    top_skills: str = "",
-    top_core_tasks: str = "",
-) -> str:
+def build_job_text(title: str, description: str = "", top_skills: str = "", top_core_tasks: str = "") -> str:
     return (
         f"Job Title: {title}. "
         f"Description: {description}. "
@@ -371,39 +386,330 @@ def build_nlp_numeric_array(
     return np.array([values], dtype="float32")
 
 
-def extract_nlp_outputs(prediction):
+def unpack_nlp_prediction(raw_prediction):
     """
-    Output model NLP kadang berupa list/tuple, kadang dict.
-    Fungsi ini mencari:
-    - pred_label: output klasifikasi dengan dimensi terakhir > 1
-    - pred_score: output regresi skor risiko dengan dimensi terakhir == 1
+    Mendukung output model berbentuk list/tuple atau dict.
+    Target:
+    - pred_label: probabilitas klasifikasi
+    - pred_score: skor risiko regresi
     """
-    if isinstance(prediction, dict):
-        values = list(prediction.values())
-    elif isinstance(prediction, (list, tuple)):
-        values = list(prediction)
+    if isinstance(raw_prediction, dict):
+        pred_label = None
+        for key in ["risk_label", "risk_label_output", "classification"]:
+            if key in raw_prediction:
+                pred_label = raw_prediction[key]
+                break
+
+        pred_score = None
+        for key in ["risk_score", "automation_risk_score", "score"]:
+            if key in raw_prediction:
+                pred_score = raw_prediction[key]
+                break
+
+        if pred_label is None:
+            first_key = list(raw_prediction.keys())[0]
+            pred_label = raw_prediction[first_key]
+
+        if pred_score is None:
+            keys = list(raw_prediction.keys())
+            pred_score = raw_prediction[keys[1]] if len(keys) > 1 else None
+
+        return pred_label, pred_score
+
+    if isinstance(raw_prediction, (list, tuple)):
+        if len(raw_prediction) == 1:
+            return raw_prediction[0], None
+        return raw_prediction[0], raw_prediction[1]
+
+    return raw_prediction, None
+
+
+def predict_nlp_core(payload: PredictRequest) -> Dict[str, Any]:
+    if NLP_MODEL is None or NLP_ARTIFACTS is None:
+        return {
+            "status": "failed",
+            "error": "Model NLP atau artifact NLP belum berhasil diload.",
+            "load_errors": LOAD_ERRORS,
+        }
+
+    label_classes = NLP_ARTIFACTS.get("label_classes", [])
+
+    job_text = build_job_text(
+        title=payload.title,
+        description=payload.description,
+        top_skills=payload.top_skills,
+        top_core_tasks=payload.top_core_tasks,
+    )
+
+    text_arr = np.array([job_text], dtype=object)
+    numeric_arr = build_nlp_numeric_array(NLP_ARTIFACTS, payload.numeric_features)
+
+    try:
+        raw_prediction = NLP_MODEL.predict(
+            {
+                "job_text": text_arr,
+                "numeric_features": numeric_arr,
+            },
+            verbose=0,
+        )
+    except Exception:
+        raw_prediction = NLP_MODEL.predict(
+            [text_arr, numeric_arr],
+            verbose=0,
+        )
+
+    pred_label, pred_score = unpack_nlp_prediction(raw_prediction)
+
+    label_idx = int(np.argmax(pred_label[0]))
+    risk_label = label_classes[label_idx] if label_classes else TABULAR_LABEL_MAP.get(label_idx, str(label_idx))
+    confidence = float(pred_label[0][label_idx])
+
+    probabilities = {}
+    for idx, prob in enumerate(pred_label[0]):
+        label_name = label_classes[idx] if idx < len(label_classes) else TABULAR_LABEL_MAP.get(idx, str(idx))
+        probabilities[str(label_name)] = round(float(prob) * 100, 2)
+
+    if pred_score is not None:
+        risk_score = float(np.ravel(pred_score)[0])
     else:
-        raise ValueError("Output model NLP tidak dikenali.")
+        risk_score = score_from_probabilities(probabilities)
 
-    if len(values) < 2:
-        raise ValueError("Model NLP harus memiliki minimal 2 output: label dan score.")
+    risk_score = clamp01(risk_score)
 
-    arrays = [np.asarray(v) for v in values]
+    return {
+        "status": "success",
+        "source": "nlp_model",
+        "risk_label": str(risk_label),
+        "risk_class": label_idx,
+        "confidence": round(confidence, 4),
+        "confidence_percent": round(confidence * 100, 2),
+        "automation_risk_score": round(risk_score, 4),
+        "risk_percent": round(risk_score * 100, 2),
+        "probabilities": probabilities,
+    }
 
-    label_candidates = [
-        arr for arr in arrays
-        if arr.ndim >= 2 and arr.shape[-1] > 1
-    ]
-    score_candidates = [
-        arr for arr in arrays
-        if arr.ndim >= 2 and arr.shape[-1] == 1
-    ]
+# Helper Tabular
 
-    pred_label = label_candidates[0] if label_candidates else arrays[0]
-    pred_score = score_candidates[0] if score_candidates else arrays[1]
+def preprocess_tabular_input(input_dict: Optional[Dict[str, float]]) -> np.ndarray:
+    if TABULAR_FEATURE_COLS is None or TABULAR_IMPUTER is None or TABULAR_SCALER is None:
+        raise RuntimeError("Artifact tabular belum berhasil diload.")
 
-    return pred_label, pred_score
+    input_dict = input_dict or {}
+    df = pd.DataFrame([input_dict])
 
+    for col in TABULAR_FEATURE_COLS:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    df = df[TABULAR_FEATURE_COLS]
+
+    # Pastikan semua nilai numerik. Nilai yang gagal dikonversi menjadi NaN,
+    # lalu akan ditangani oleh imputer.
+    for col in TABULAR_FEATURE_COLS:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df_imp = pd.DataFrame(
+        TABULAR_IMPUTER.transform(df),
+        columns=TABULAR_FEATURE_COLS,
+    )
+
+    df_scaled = pd.DataFrame(
+        TABULAR_SCALER.transform(df_imp),
+        columns=TABULAR_FEATURE_COLS,
+    )
+
+    return df_scaled.values.astype(np.float32)
+
+
+def predict_tabular_core(payload: PredictRequest) -> Dict[str, Any]:
+    if TABULAR_MODEL is None:
+        return {
+            "status": "failed",
+            "error": "Model tabular belum berhasil diload.",
+            "load_errors": LOAD_ERRORS,
+        }
+
+    # Jika tabular_features tidak dikirim, gunakan numeric_features sebagai fallback.
+    input_features = payload.tabular_features
+    if input_features is None:
+        input_features = payload.numeric_features
+
+    try:
+        X = preprocess_tabular_input(input_features)
+        proba = TABULAR_MODEL.predict(X, verbose=0)[0]
+    except Exception as e:
+        return {
+            "status": "failed",
+            "source": "tabular_model",
+            "error_type": type(e).__name__,
+            "error_message": str(e),
+        }
+
+    risk_class = int(np.argmax(proba))
+    risk_label = TABULAR_LABEL_MAP.get(risk_class, str(risk_class))
+    confidence = float(proba[risk_class])
+
+    probabilities = {
+        TABULAR_LABEL_MAP.get(i, str(i)): round(float(proba[i]) * 100, 2)
+        for i in range(len(proba))
+    }
+
+    # Model tabular hanya klasifikasi. Agar bisa di-ensemble dengan NLP,
+    # score dihitung dari probabilitas kelas:
+    # Low=0.0, Medium=0.5, High=1.0.
+    tabular_score = 0.0
+    if len(proba) > 0:
+        tabular_score += float(proba[0]) * 0.0
+    if len(proba) > 1:
+        tabular_score += float(proba[1]) * 0.5
+    if len(proba) > 2:
+        tabular_score += float(proba[2]) * 1.0
+
+    tabular_score = clamp01(tabular_score)
+
+    return {
+        "status": "success",
+        "source": "tabular_model",
+        "risk_label": risk_label,
+        "risk_class": risk_class,
+        "confidence": round(confidence, 4),
+        "confidence_percent": round(confidence * 100, 2),
+        "automation_risk_score": round(tabular_score, 4),
+        "risk_percent": round(tabular_score * 100, 2),
+        "probabilities": probabilities,
+        "features_received": sorted(list((input_features or {}).keys())),
+        "missing_features_filled_by_imputer": [
+            col for col in (TABULAR_FEATURE_COLS or []) if col not in (input_features or {})
+        ],
+    }
+
+# Helper Ensemble
+
+def clamp01(value: float) -> float:
+    try:
+        value = float(value)
+    except Exception:
+        return 0.0
+
+    return max(0.0, min(1.0, value))
+
+
+def normalize_risk_label(label: Any) -> str:
+    label = str(label).lower()
+
+    if "high" in label or "tinggi" in label:
+        return "High Risk"
+
+    if "medium" in label or "sedang" in label:
+        return "Medium Risk"
+
+    if "low" in label or "rendah" in label or "aman" in label:
+        return "Low Risk"
+
+    return str(label)
+
+
+def label_from_score(score: float) -> str:
+    score = clamp01(score)
+
+    if score < 0.34:
+        return "Low Risk"
+
+    if score < 0.67:
+        return "Medium Risk"
+
+    return "High Risk"
+
+
+def score_from_probabilities(probabilities: Dict[str, float]) -> float:
+    """
+    probabilities berisi persen, contoh:
+    {
+      "Low Risk": 20.0,
+      "Medium Risk": 30.0,
+      "High Risk": 50.0
+    }
+    """
+    score = 0.0
+
+    for label, prob_percent in probabilities.items():
+        normalized = normalize_risk_label(label)
+        prob = float(prob_percent) / 100.0
+
+        if normalized == "Low Risk":
+            score += prob * 0.0
+        elif normalized == "Medium Risk":
+            score += prob * 0.5
+        elif normalized == "High Risk":
+            score += prob * 1.0
+
+    return clamp01(score)
+
+
+def ensemble_predictions(
+    nlp_prediction: Dict[str, Any],
+    tabular_prediction: Dict[str, Any],
+    nlp_weight: float = 0.6,
+    tabular_weight: float = 0.4,
+) -> Dict[str, Any]:
+    nlp_ok = nlp_prediction.get("status") == "success"
+    tabular_ok = tabular_prediction.get("status") == "success"
+
+    if not nlp_ok and not tabular_ok:
+        return {
+            "status": "failed",
+            "error": "Prediksi NLP dan tabular sama-sama gagal.",
+        }
+
+    available_scores = []
+    total_weight = 0.0
+
+    if nlp_ok:
+        w = max(0.0, float(nlp_weight))
+        available_scores.append((float(nlp_prediction["automation_risk_score"]), w, "nlp_model"))
+        total_weight += w
+
+    if tabular_ok:
+        w = max(0.0, float(tabular_weight))
+        available_scores.append((float(tabular_prediction["automation_risk_score"]), w, "tabular_model"))
+        total_weight += w
+
+    if total_weight <= 0:
+        # Fallback jika user mengirim bobot 0 semua.
+        total_weight = float(len(available_scores))
+        available_scores = [(score, 1.0, source) for score, _, source in available_scores]
+
+    final_score = sum(score * weight for score, weight, _ in available_scores) / total_weight
+    final_score = clamp01(final_score)
+    final_label = label_from_score(final_score)
+
+    nlp_label = normalize_risk_label(nlp_prediction.get("risk_label")) if nlp_ok else None
+    tabular_label = normalize_risk_label(tabular_prediction.get("risk_label")) if tabular_ok else None
+
+    return {
+        "status": "success",
+        "source": "ensemble_nlp_tabular",
+        "risk_label": final_label,
+        "automation_risk_score": round(final_score, 4),
+        "risk_percent": round(final_score * 100, 2),
+        "weights": {
+            "nlp_weight": nlp_weight if nlp_ok else 0.0,
+            "tabular_weight": tabular_weight if tabular_ok else 0.0,
+            "effective_total_weight": round(total_weight, 4),
+        },
+        "models_used": [source for _, _, source in available_scores],
+        "model_agreement": bool(nlp_label == tabular_label) if (nlp_ok and tabular_ok) else None,
+        "model_labels": {
+            "nlp_model": nlp_label,
+            "tabular_model": tabular_label,
+        },
+        "note": (
+            "Final prediction dihitung dari weighted average automation_risk_score NLP dan tabular. "
+            "Jika salah satu model gagal load/predict, final prediction memakai model yang berhasil."
+        ),
+    }
+
+# Helper JSON AI
 
 def parse_ai_json(text: str) -> Dict[str, Any]:
     if not text:
@@ -434,18 +740,19 @@ def parse_ai_json(text: str) -> Dict[str, Any]:
         "raw_response": text,
     }
 
+# OpenRouter Reskilling Generator
 
 def generate_reskilling_with_openrouter(
     title: str,
     description: str,
     top_skills: str,
     top_core_tasks: str,
-    risk_label: str,
-    confidence: float,
-    automation_risk_score: float,
-    model_name: str = "meta-llama/llama-3.3-70b-instruct:free",
+    final_prediction: Dict[str, Any],
+    nlp_prediction: Dict[str, Any],
+    tabular_prediction: Dict[str, Any],
+    model_name: str = "deepseek/deepseek-v4-flash:free",
 ) -> Dict[str, Any]:
-    api_key = os.getenv("OPENROUTER_API_KEY", "")
+    api_key = ""
 
     if not api_key:
         return {
@@ -465,8 +772,6 @@ def generate_reskilling_with_openrouter(
             "message": "Package openrouter belum terinstall. Install dengan: pip install openrouter",
         }
 
-    risk_percent = round(float(automation_risk_score) * 100, 2)
-
     input_payload = {
         "job_input": {
             "title": title,
@@ -474,17 +779,16 @@ def generate_reskilling_with_openrouter(
             "top_skills": top_skills,
             "top_core_tasks": top_core_tasks,
         },
-        "model_prediction": {
-            "risk_label": risk_label,
-            "confidence": round(float(confidence), 4),
-            "automation_risk_score": round(float(automation_risk_score), 4),
-            "risk_percent": risk_percent,
+        "final_prediction": final_prediction,
+        "model_predictions": {
+            "nlp_prediction": nlp_prediction,
+            "tabular_prediction": tabular_prediction,
         },
     }
 
     system_prompt = """
 Kamu adalah AI career coach untuk aplikasi WorkSafe AI.
-Tugasmu membuat rekomendasi reskilling pekerjaan berdasarkan input pekerjaan user dan hasil prediksi model NLP.
+Tugasmu membuat rekomendasi reskilling pekerjaan berdasarkan input pekerjaan user dan hasil prediksi gabungan model NLP + tabular.
 
 Balas HANYA dalam format JSON valid.
 Jangan memakai markdown.
@@ -502,12 +806,13 @@ Format JSON yang wajib dikembalikan:
 
 {{
   "recommendation_source": "openrouter_gen_ai",
-  "risk_interpretation": "penjelasan singkat tentang arti level risiko pekerjaan ini",
+  "risk_interpretation": "penjelasan singkat tentang arti level risiko pekerjaan ini berdasarkan final_prediction",
+  "model_insight": "jelaskan singkat bagaimana membaca hasil NLP, tabular, dan final prediction",
   "main_reskilling_goal": "tujuan utama reskilling untuk user",
   "recommended_skills": [
     {{
       "skill": "nama skill",
-      "reason": "alasan skill ini penting",
+      "reason": "alasan skill ini penting untuk pekerjaan user",
       "priority": "High/Medium/Low"
     }}
   ],
@@ -530,7 +835,8 @@ Aturan:
 - tools_to_learn minimal 4 item.
 - mini_project_ideas minimal 3 item.
 - career_transition_options minimal 3 item.
-- Sesuaikan rekomendasi dengan risk_label dan automation_risk_score.
+- Sesuaikan rekomendasi dengan final_prediction.risk_label dan final_prediction.automation_risk_score.
+- Pertimbangkan juga input pekerjaan, top_skills, dan top_core_tasks.
 - Jangan memberi rekomendasi yang terlalu umum.
 - Jawab hanya JSON valid.
 """.strip()
@@ -549,6 +855,7 @@ Aturan:
         content = message.content if hasattr(message, "content") else message["content"]
 
         parsed = parse_ai_json(content)
+
         if isinstance(parsed, dict):
             parsed.setdefault("recommendation_source", "openrouter_gen_ai")
             parsed.setdefault("openrouter_status", "success")
@@ -565,310 +872,93 @@ Aturan:
             "error_message": str(e),
             "message": (
                 "Prediksi risiko berhasil, tetapi rekomendasi reskilling gagal dibuat "
-                "karena request OpenRouter gagal."
+                "karena request OpenRouter gagal. Coba ulang beberapa menit lagi, "
+                "gunakan model lain, atau pastikan akun OpenRouter memiliki limit/credit."
             ),
         }
 
+# Main Prediction
 
-def predict_nlp_core(payload: NLPPredictRequest) -> Dict[str, Any]:
-    if NLP_MODEL is None or NLP_ARTIFACTS is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Model NLP atau artifact NLP belum berhasil diload.",
-        )
+def predict_combined_core(payload: PredictRequest) -> Dict[str, Any]:
+    nlp_prediction = predict_nlp_core(payload)
+    tabular_prediction = predict_tabular_core(payload)
 
-    label_classes = NLP_ARTIFACTS.get("label_classes", [])
-
-    job_text = build_job_text(
-        title=payload.title,
-        description=payload.description,
-        top_skills=payload.top_skills,
-        top_core_tasks=payload.top_core_tasks,
+    final_prediction = ensemble_predictions(
+        nlp_prediction=nlp_prediction,
+        tabular_prediction=tabular_prediction,
+        nlp_weight=payload.nlp_weight,
+        tabular_weight=payload.tabular_weight,
     )
 
-    text_arr = np.array([job_text], dtype=object)
-    numeric_arr = build_nlp_numeric_array(NLP_ARTIFACTS, payload.numeric_features)
-
-    try:
-        raw_prediction = NLP_MODEL.predict(
-            {
-                "job_text": text_arr,
-                "numeric_features": numeric_arr,
-            },
-            verbose=0,
-        )
-    except Exception:
-        raw_prediction = NLP_MODEL.predict(
-            [text_arr, numeric_arr],
-            verbose=0,
-        )
-
-    pred_label, pred_score = extract_nlp_outputs(raw_prediction)
-
-    label_idx = int(np.argmax(pred_label[0]))
-    risk_label = label_classes[label_idx] if label_classes else str(label_idx)
-    confidence = float(pred_label[0][label_idx])
-    risk_score = float(pred_score[0][0])
-
     result = {
-        "status": "success",
-        "model_type": "nlp",
+        "status": "success" if final_prediction.get("status") == "success" else "failed",
         "input": {
             "title": payload.title,
             "description": payload.description,
             "top_skills": payload.top_skills,
             "top_core_tasks": payload.top_core_tasks,
+            "numeric_features_received": sorted(list((payload.numeric_features or {}).keys())),
+            "tabular_features_received": sorted(list((payload.tabular_features or {}).keys())),
         },
         "prediction": {
-            "risk_label": risk_label,
-            "confidence": round(confidence, 4),
-            "automation_risk_score": round(risk_score, 4),
-            "risk_percent": round(risk_score * 100, 2),
+            "final": final_prediction,
+            "nlp_model": nlp_prediction,
+            "tabular_model": tabular_prediction,
         },
     }
 
-    if payload.generate_reskilling:
+    if payload.generate_reskilling and final_prediction.get("status") == "success":
         result["reskilling_recommendation"] = generate_reskilling_with_openrouter(
             title=payload.title,
             description=payload.description,
             top_skills=payload.top_skills,
             top_core_tasks=payload.top_core_tasks,
-            risk_label=risk_label,
-            confidence=confidence,
-            automation_risk_score=risk_score,
+            final_prediction=final_prediction,
+            nlp_prediction=nlp_prediction,
+            tabular_prediction=tabular_prediction,
             model_name=payload.openrouter_model,
         )
 
     return result
 
-# TABULAR HELPERS
-
-def preprocess_tabular_input(input_dict: Dict[str, float]) -> np.ndarray:
-    if TABULAR_SCALER is None or TABULAR_IMPUTER is None or TABULAR_FEATURE_COLS is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Artifact tabular belum berhasil diload.",
-        )
-
-    df = pd.DataFrame([input_dict])
-
-    for col in TABULAR_FEATURE_COLS:
-        if col not in df.columns:
-            df[col] = np.nan
-
-    df = df[TABULAR_FEATURE_COLS]
-
-    df_imp = pd.DataFrame(
-        TABULAR_IMPUTER.transform(df),
-        columns=TABULAR_FEATURE_COLS,
-    )
-
-    df_scaled = pd.DataFrame(
-        TABULAR_SCALER.transform(df_imp),
-        columns=TABULAR_FEATURE_COLS,
-    )
-
-    return df_scaled.values.astype(np.float32)
-
-
-def predict_tabular_core(features: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
-    if TABULAR_MODEL is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Model tabular belum berhasil diload.",
-        )
-
-    features = features or {}
-
-    full_input = {
-        col: TABULAR_MEDIAN_VALUES[col]
-        for col in TABULAR_FEATURE_COLS
-    }
-    full_input.update(features)
-
-    X = preprocess_tabular_input(full_input)
-    proba = TABULAR_MODEL.predict(X, verbose=0)[0]
-    kelas = int(np.argmax(proba))
-    risk_label = TABULAR_LABEL_MAP.get(kelas, str(kelas))
-
-    return {
-        "status": "success",
-        "model_type": "tabular",
-        "input": {
-            "provided_feature_count": len(features),
-            "total_feature_count": len(TABULAR_FEATURE_COLS),
-            "missing_features_filled_with_median": len(TABULAR_FEATURE_COLS) - len(features),
-        },
-        "prediction": {
-            "risk_label": risk_label,
-            "risk_class": kelas,
-            "confidence": round(float(proba[kelas]) * 100, 2),
-            "probabilities": {
-                "Low Risk": round(float(proba[0]) * 100, 2),
-                "Medium Risk": round(float(proba[1]) * 100, 2),
-                "High Risk": round(float(proba[2]) * 100, 2),
-            },
-        },
-    }
-
-# COMBINED HELPERS
-
-def normalize_risk_label(label: str) -> str:
-    label_lower = str(label).lower()
-
-    if "low" in label_lower or "rendah" in label_lower:
-        return "Low"
-    if "medium" in label_lower or "sedang" in label_lower:
-        return "Medium"
-    if "high" in label_lower or "tinggi" in label_lower:
-        return "High"
-
-    return str(label)
-
-
-def build_combined_prediction(nlp_result: Dict[str, Any], tabular_result: Dict[str, Any]) -> Dict[str, Any]:
-    nlp_label = normalize_risk_label(nlp_result["prediction"]["risk_label"])
-    tabular_label = normalize_risk_label(tabular_result["prediction"]["risk_label"])
-
-    risk_rank = {
-        "Low": 0,
-        "Medium": 1,
-        "High": 2,
-    }
-
-    nlp_rank = risk_rank.get(nlp_label, -1)
-    tabular_rank = risk_rank.get(tabular_label, -1)
-
-    if nlp_rank >= 0 and tabular_rank >= 0:
-        final_label = nlp_label if nlp_rank >= tabular_rank else tabular_label
-        agreement = nlp_label == tabular_label
-    else:
-        final_label = "Review Needed"
-        agreement = False
-
-    return {
-        "merge_strategy": "conservative_max_risk",
-        "agreement": agreement,
-        "nlp_normalized_label": nlp_label,
-        "tabular_normalized_label": tabular_label,
-        "final_risk_label": final_label,
-        "message": (
-            "Hasil akhir memakai strategi konservatif: jika dua model berbeda, "
-            "API mengambil level risiko yang lebih tinggi."
-        ),
-    }
-
-
-# ROUTES
+# Endpoints
 
 @app.get("/")
 def root():
     return {
-        "message": "WorkSafe AI NLP + Tabular API aktif",
+        "message": "WorkSafe AI Combined NLP + Tabular Risk Prediction API",
         "docs": "/docs",
         "health": "/health",
-        "nlp_predict": "/predict",
-        "tabular_predict": "/predict-tabular",
-        "combined_predict": "/predicts",
-        "tabular_features": "/features",
+        "predict": "/predict",
     }
 
 
 @app.get("/health", response_model=HealthResponse)
 def health():
     return {
-        "status": "ok",
+        "status": "ok" if not LOAD_ERRORS else "warning",
         "nlp_model_loaded": NLP_MODEL is not None,
         "nlp_artifacts_loaded": NLP_ARTIFACTS is not None,
         "tabular_model_loaded": TABULAR_MODEL is not None,
-        "tabular_artifacts_loaded": all([
-            TABULAR_SCALER is not None,
-            TABULAR_IMPUTER is not None,
-            TABULAR_FEATURE_COLS is not None,
-        ]),
-        "paths": {
-            "nlp_model": str(NLP_MODEL_PATH if NLP_MODEL_PATH.exists() else NLP_FALLBACK_MODEL_PATH),
-            "nlp_artifact": str(NLP_ARTIFACT_PATH),
-            "tabular_model": str(TABULAR_MODEL_PATH),
-            "tabular_scaler": str(TABULAR_SCALER_PATH),
-            "tabular_imputer": str(TABULAR_IMPUTER_PATH),
-            "tabular_features": str(TABULAR_FEATURES_PATH),
-        },
-    }
-
-
-@app.get("/features")
-def get_tabular_features():
-    if TABULAR_FEATURE_COLS is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Daftar fitur tabular belum berhasil diload.",
-        )
-
-    return {
-        "total_features": len(TABULAR_FEATURE_COLS),
-        "feature_list": list(TABULAR_FEATURE_COLS),
-        "example_payload": {
-            "features": {
-                col: 3
-                for col in list(TABULAR_FEATURE_COLS)[:5]
-            }
-        },
+        "tabular_artifacts_loaded": all(
+            item is not None
+            for item in [TABULAR_SCALER, TABULAR_IMPUTER, TABULAR_FEATURE_COLS]
+        ),
+        "nlp_model_path": str(NLP_MODEL_PATH if NLP_MODEL_PATH.exists() else NLP_FALLBACK_MODEL_PATH),
+        "nlp_artifact_path": str(NLP_ARTIFACT_PATH),
+        "tabular_model_path": str(TABULAR_MODEL_PATH),
+        "tabular_scaler_path": str(TABULAR_SCALER_PATH),
+        "tabular_imputer_path": str(TABULAR_IMPUTER_PATH),
+        "tabular_feature_cols_path": str(TABULAR_FEATURE_COLS_PATH),
+        "load_errors": LOAD_ERRORS,
     }
 
 
 @app.post("/predict")
-def predict_nlp(payload: NLPPredictRequest):
-    """
-    Endpoint lama untuk model NLP saja.
-    """
-    return predict_nlp_core(payload)
+def predict(payload: PredictRequest):
+    return predict_combined_core(payload)
 
-
-@app.post("/predict-tabular")
-def predict_tabular(payload: TabularPredictRequest):
-    """
-    Endpoint untuk model tabular saja.
-    """
-    return predict_tabular_core(payload.features)
-
-
-@app.post("/predicts")
-def predict_both_models(payload: CombinedPredictRequest):
-    """
-    Endpoint gabungan.
-    Satu request akan menjalankan:
-    1. Model NLP
-    2. Model Tabular
-    3. Summary gabungan konservatif
-    """
-    nlp_payload = NLPPredictRequest(
-        title=payload.title,
-        description=payload.description,
-        top_skills=payload.top_skills,
-        top_core_tasks=payload.top_core_tasks,
-        numeric_features=payload.numeric_features,
-        generate_reskilling=payload.generate_reskilling,
-        openrouter_model=payload.openrouter_model,
-    )
-
-    tabular_features = payload.features if payload.features is not None else payload.tabular_features
-
-    nlp_result = predict_nlp_core(nlp_payload)
-    tabular_result = predict_tabular_core(tabular_features)
-    combined_prediction = build_combined_prediction(nlp_result, tabular_result)
-
-    return {
-        "status": "success",
-        "endpoint": "/predicts",
-        "nlp_result": nlp_result,
-        "tabular_result": tabular_result,
-        "combined_prediction": combined_prediction,
-    }
-
-
-# RUN DIRECTLY
-
+# Bisa pake langsung python nama_file.py
 if __name__ == "__main__":
     import uvicorn
 
