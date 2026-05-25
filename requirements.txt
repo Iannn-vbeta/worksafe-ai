@@ -1,4 +1,8 @@
-tensorflow==2.15.0
+tensorflow
 numpy
 pandas
 scikit-learn
+fastapi
+uvicorn
+pydantic
+openrouter
