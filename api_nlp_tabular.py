@@ -807,7 +807,8 @@ Format JSON yang wajib dikembalikan:
 {{
   "recommendation_source": "openrouter_gen_ai",
   "risk_interpretation": "penjelasan singkat tentang arti level risiko pekerjaan ini berdasarkan final_prediction",
-  "model_insight": "jelaskan singkat bagaimana membaca hasil NLP, tabular, dan final prediction",
+  "result_model_percentage": "mengembalikan nilai presentase final gabungan kedua model",
+  "result_model_risk_label": "mengembalikan label risiko combine kedua model",
   "main_reskilling_goal": "tujuan utama reskilling untuk user",
   "recommended_skills": [
     {{
