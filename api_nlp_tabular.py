@@ -752,7 +752,7 @@ def generate_reskilling_with_openrouter(
     tabular_prediction: Dict[str, Any],
     model_name: str = "deepseek/deepseek-v4-flash:free",
 ) -> Dict[str, Any]:
-    api_key = ""
+    api_key = os.getenv("OPENROUTER_API_KEY")
 
     if not api_key:
         return {
