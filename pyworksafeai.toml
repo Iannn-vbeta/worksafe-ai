@@ -1,0 +1,6 @@
+[project]
+name = "work-safe-ai"
+version = "1.0.0"
+
+[tool.vercel]
+entrypoint = "api_nlp_tabular:app"
