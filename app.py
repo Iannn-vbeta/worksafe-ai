@@ -32,6 +32,7 @@ import pickle
 import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+from dotenv import load_dotenv
 
 import numpy as np
 import pandas as pd
@@ -40,6 +41,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+load_dotenv()  # Load environment variables dari .env jika ada
 
 # Custom Objects
 
@@ -112,6 +114,7 @@ TABULAR_IMPUTER_PATH = TABULAR_DIR / "imputer.pkl"
 TABULAR_FEATURE_COLS_PATH = TABULAR_DIR / "feature_cols.pkl"
 
 # FastAPI App
+
 
 app = FastAPI(
     title="WorkSafe AI Combined Prediction API",
@@ -753,6 +756,7 @@ def generate_reskilling_with_openrouter(
     model_name: str = "openrouter/free",
 ) -> Dict[str, Any]:
     api_key = os.getenv("OPENROUTER_API_KEY")
+    print("OpenRouter API Key:", "SET" if api_key else "NOT SET")
 
     if not api_key:
         return {
