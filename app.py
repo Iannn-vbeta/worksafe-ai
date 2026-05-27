@@ -214,7 +214,7 @@ class PredictRequest(BaseModel):
         description="Jika true, API akan memanggil OpenRouter untuk membuat rekomendasi reskilling.",
     )
     openrouter_model: str = Field(
-        default="openrouter/free",
+        default="deepseek/deepseek-v4-flash:free",
         description="Model OpenRouter. Bisa diganti sesuai model yang tersedia di akunmu.",
     )
 
@@ -753,7 +753,7 @@ def generate_reskilling_with_openrouter(
     final_prediction: Dict[str, Any],
     nlp_prediction: Dict[str, Any],
     tabular_prediction: Dict[str, Any],
-    model_name: str = "openrouter/free",
+    model_name: str = "deepseek/deepseek-v4-flash:free",
 ) -> Dict[str, Any]:
     api_key = os.getenv("OPENROUTER_API_KEY")
     print("OpenRouter API Key:", "SET" if api_key else "NOT SET")
